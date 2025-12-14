@@ -28,6 +28,7 @@ async function run() {
 
     const db = client.db("garmentsDB");
     const productsCollection = db.collection("products");
+    const ordersCollection = db.collection("orders");
     const usersCollection = db.collection("users");
     console.log("MongoDB connected successfully!");
 
@@ -172,7 +173,6 @@ async function run() {
       });
       if (!product)
         return res.status(404).send({ message: "Product not found" });
-      // Manager can update only own product
       if (
         req.userRole === "manager" &&
         product.managerEmail !== req.userEmail
@@ -231,6 +231,48 @@ async function run() {
         res.status(500).send({ message: "Failed to fetch profile" });
       }
     });
+    app.get("/users", verifyFireBaseToken, async (req, res) => {
+      const users = await usersCollection.find().toArray();
+      res.send(users);
+    });
+    app.put("/users/:id", verifyFireBaseToken, async (req, res) => {
+      const id = req.params.id;
+      const { role, suspended, suspendReason } = req.body;
+      const result = await usersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { role, suspended, suspendReason: suspendReason || "" } }
+      );
+      res.send(result);
+    });
+    app.delete("/users/:id", verifyFireBaseToken, async (req, res) => {
+      const id = req.params.id;
+      const result = await usersCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+    app.delete("/orders/:id", verifyFireBaseToken, async (req, res) => {
+      const id = req.params.id;
+      const result = await ordersCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+    app.put(
+      "/orders/:id/status",
+      verifyFireBaseToken,
+      async (req, res) => {
+        const id = req.params.id;
+        const { status } = req.body; // Pending / Approved / Rejected
+        const approvedAt = status === "Approved" ? new Date() : null;
+
+        const result = await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status, approvedAt } }
+        );
+        res.send(result);
+      }
+    );
 
     // ================= Home Test =================
     app.get("/", (req, res) => {
