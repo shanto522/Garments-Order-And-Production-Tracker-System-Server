@@ -207,16 +207,30 @@ async function run() {
       });
       res.send(result);
     });
-    app.get(
-      "/orders",
-      verifyFireBaseToken,
-      async (req, res) => {
-        const query = {};
-        if (req.query.status) query.status = req.query.status;
-        const orders = await ordersCollection.find(query).toArray();
-        res.send(orders);
+    app.get("/orders", verifyFireBaseToken, async (req, res) => {
+      const query = {};
+      if (req.query.status) query.status = req.query.status;
+      const orders = await ordersCollection.find(query).toArray();
+      res.send(orders);
+    });
+    app.get("/profile", verifyFireBaseToken, async (req, res) => {
+      try {
+        const email = req.userEmail;
+        const user = await usersCollection.findOne({ email });
+        if (!user) return res.status(404).send({ message: "User not found" });
+
+        res.send({
+          name: user.name,
+          email: user.email,
+          role: user.role || "Customer",
+          photoURL: user.photoURL || "",
+          status: user.suspended ? "Suspended" : "Active",
+          suspendFeedback: user.suspendReason || "",
+        });
+      } catch (err) {
+        res.status(500).send({ message: "Failed to fetch profile" });
       }
-    );
+    });
 
     // ================= Home Test =================
     app.get("/", (req, res) => {
