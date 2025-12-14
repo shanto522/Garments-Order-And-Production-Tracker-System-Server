@@ -1,13 +1,21 @@
 // index.js
 const express = require("express");
 const cors = require("cors");
-
+const crypto = require("crypto");
 const app = express();
-
+const bcrypt = require("bcrypt");
 require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 const port = process.env.PORT || 3000;
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
+const admin = require("firebase-admin");
+// ================= Firebase Admin Initialization =================
+const serviceAccount = require("./garments-order-tracker-client-firebase-adminsdk.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 // ================= Middleware =================
 app.use(express.json());
@@ -269,6 +277,43 @@ async function run() {
       );
       res.send(result);
     });
+    app.put("/orders/:id/progress", async (req, res) => {
+      const { stage, currentLocation } = req.body;
+      const orderId = req.params.id;
+
+      if (!ObjectId.isValid(orderId))
+        return res.status(400).send({ message: "Invalid order ID" });
+
+      const order = await ordersCollection.findOne({
+        _id: new ObjectId(orderId),
+      });
+      if (!order) return res.status(404).send({ message: "Order not found" });
+
+      const updatedTracking = order.tracking || [];
+      const updatedTrackingDates = order.trackingDates || {};
+
+      if (
+        stage &&
+        stage !== "LocationUpdate" &&
+        !updatedTracking.includes(stage)
+      ) {
+        updatedTracking.push(stage);
+        updatedTrackingDates[stage] = new Date();
+      }
+
+      const updateData = {
+        tracking: updatedTracking,
+        trackingDates: updatedTrackingDates,
+      };
+      if (currentLocation) updateData.currentLocation = currentLocation;
+
+      await ordersCollection.updateOne(
+        { _id: new ObjectId(orderId) },
+        { $set: updateData }
+      );
+      res.send({ message: "Order updated successfully!" });
+    });
+
     app.get("/track-order/:orderId", verifyFireBaseToken, async (req, res) => {
       const { orderId } = req.params;
       if (!ObjectId.isValid(orderId))
@@ -282,6 +327,118 @@ async function run() {
       if (!order) return res.status(404).send({ message: "Order not found" });
 
       res.send(order);
+    });
+    app.post("/create-checkout-session", async (req, res) => {
+      try {
+        const { productId, productName, cost, senderEmail, metadata } =
+          req.body;
+        const amount = Number(cost) * 100; // Stripe expects cents
+        const domain = process.env.SITE_DOMAIN || "http://localhost:5173";
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                product_data: { name: productName },
+                unit_amount: amount,
+              },
+              quantity: 1,
+            },
+          ],
+          mode: "payment",
+          customer_email: senderEmail,
+          metadata, // save order info for after payment
+          success_url: `${domain}/dashboard/payment-success`,
+          cancel_url: `${domain}/dashboard/payment-cancel`,
+        });
+
+        res.status(200).send({ url: session.url });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to create Stripe session" });
+      }
+    });
+    // Order paid after success
+    app.put("/order-paid/:id", async (req, res) => {
+      const orderId = req.params.id;
+
+      await ordersCollection.updateOne(
+        { _id: new ObjectId(orderId) },
+        {
+          $set: {
+            paymentStatus: "Paid",
+            paidAt: new Date(),
+          },
+        }
+      );
+
+      res.send({ message: "Order marked as paid" });
+    });
+    app.post("/orders/payment-success", async (req, res) => {
+      try {
+        const {
+          productId,
+          productName,
+          quantity,
+          orderPrice,
+          firstName,
+          lastName,
+          contactNumber,
+          deliveryAddress,
+          notes,
+          userEmail,
+          paymentOption, // dynamic
+          stripeSessionId, // 🔥 prevent duplicate
+        } = req.body;
+
+        if (
+          !productId ||
+          !productName ||
+          !quantity ||
+          !orderPrice ||
+          !userEmail
+        ) {
+          return res.status(400).send({ message: "Missing required fields" });
+        }
+
+        // Duplicate prevention using stripeSessionId
+        if (stripeSessionId) {
+          const existingOrder = await ordersCollection.findOne({
+            stripeSessionId,
+          });
+          if (existingOrder) {
+            return res.send({ success: true, orderId: existingOrder._id });
+          }
+        }
+
+        const newOrder = {
+          productId,
+          productName,
+          quantity,
+          orderPrice,
+          firstName,
+          lastName,
+          contactNumber,
+          deliveryAddress,
+          notes,
+          userEmail,
+          paymentOption: paymentOption || "Cash on Delivery",
+          status: "Pending",
+          paymentStatus: "Paid",
+          orderDate: new Date(),
+          createdAt: new Date(),
+          paidAt: new Date(),
+          stripeSessionId: stripeSessionId || null,
+        };
+
+        const result = await ordersCollection.insertOne(newOrder);
+        res.send({ success: true, orderId: result.insertedId });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to create order" });
+      }
     });
     // ================= Home Test =================
     app.get("/", (req, res) => {
