@@ -64,16 +64,25 @@ async function run() {
       res.send(result);
     });
     //--------Add Product--------
-    app.post(
-      "/products",
-      verifyFireBaseToken,
-      async (req, res) => {
-        const product = { ...req.body, managerEmail: req.userEmail };
-        const result = await productsCollection.insertOne(product);
-        res.send(result);
-      }
-    );
+    app.post("/products", verifyFireBaseToken, async (req, res) => {
+      const product = { ...req.body, managerEmail: req.userEmail };
+      const result = await productsCollection.insertOne(product);
+      res.send(result);
+    });
+    //----------All Product---------
+    app.get("/all-products", async (req, res) => {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+      const skip = (page - 1) * limit;
 
+      const total = await productsCollection.countDocuments();
+      const products = await productsCollection
+        .find()
+        .skip(skip)
+        .limit(limit)
+        .toArray();
+      res.send({ products, total });
+    });
     // ================= Home Test =================
     app.get("/", (req, res) => {
       res.send("Garments Order & Production Tracker Backend is running!");
