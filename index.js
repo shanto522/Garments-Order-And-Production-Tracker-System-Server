@@ -258,22 +258,31 @@ async function run() {
       });
       res.send(result);
     });
-    app.put(
-      "/orders/:id/status",
-      verifyFireBaseToken,
-      async (req, res) => {
-        const id = req.params.id;
-        const { status } = req.body; // Pending / Approved / Rejected
-        const approvedAt = status === "Approved" ? new Date() : null;
+    app.put("/orders/:id/status", verifyFireBaseToken, async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body; // Pending / Approved / Rejected
+      const approvedAt = status === "Approved" ? new Date() : null;
 
-        const result = await ordersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { status, approvedAt } }
-        );
-        res.send(result);
-      }
-    );
+      const result = await ordersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status, approvedAt } }
+      );
+      res.send(result);
+    });
+    app.get("/track-order/:orderId", verifyFireBaseToken, async (req, res) => {
+      const { orderId } = req.params;
+      if (!ObjectId.isValid(orderId))
+        return res.status(400).send({ message: "Invalid order ID" });
 
+      const order = await ordersCollection.findOne({
+        _id: new ObjectId(orderId),
+        userEmail: req.userEmail, // only owner can see
+      });
+
+      if (!order) return res.status(404).send({ message: "Order not found" });
+
+      res.send(order);
+    });
     // ================= Home Test =================
     app.get("/", (req, res) => {
       res.send("Garments Order & Production Tracker Backend is running!");
