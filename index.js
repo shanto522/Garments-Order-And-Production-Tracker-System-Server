@@ -30,7 +30,7 @@ async function run() {
     const productsCollection = db.collection("products");
     const usersCollection = db.collection("users");
     console.log("MongoDB connected successfully!");
-    // ================= Firebase Token Verification Middleware =================
+    //-----Firebase Token Verification Middleware------
     const verifyFireBaseToken = async (req, res, next) => {
       const authorization = req.headers.authorization;
       if (!authorization) {
@@ -45,9 +45,7 @@ async function run() {
         return res.status(401).send({ message: "unauthorized access" });
       }
     };
-    // ================= Users Routes =================
-    // Save user to MongoDB after login/signup
-
+    //----Save user to MongoDB after login/signup------
     app.post("/users", verifyFireBaseToken, async (req, res) => {
       const { email, name, photoURL } = req.body;
       const existingUser = await usersCollection.findOne({ email });
@@ -92,6 +90,22 @@ async function run() {
         return res.status(404).send({ message: "Product not found" });
       res.send(product);
     });
+    //-----Get my orders------
+    app.get("/my-orders", async (req, res) => {
+      const { email, page = 1, limit = 10 } = req.query;
+      const skip = (page - 1) * limit;
+
+      const total = await ordersCollection.countDocuments({ userEmail: email });
+      const orders = await ordersCollection
+        .find({ userEmail: email })
+        .sort({ createdAt: -1 })
+        .skip(parseInt(skip))
+        .limit(parseInt(limit))
+        .toArray();
+
+      res.send({ orders, total });
+    });
+
     // ================= Home Test =================
     app.get("/", (req, res) => {
       res.send("Garments Order & Production Tracker Backend is running!");
