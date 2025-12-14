@@ -63,6 +63,16 @@ async function run() {
       const result = await usersCollection.insertOne(newUser);
       res.send(result);
     });
+    //--------Add Product--------
+    app.post(
+      "/products",
+      verifyFireBaseToken,
+      async (req, res) => {
+        const product = { ...req.body, managerEmail: req.userEmail };
+        const result = await productsCollection.insertOne(product);
+        res.send(result);
+      }
+    );
 
     // ================= Home Test =================
     app.get("/", (req, res) => {
