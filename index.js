@@ -70,7 +70,17 @@ async function run() {
       const result = await usersCollection.insertOne(newUser);
       res.send(result);
     });
-
+    app.get("/home-products", async (req, res) => {
+      try {
+        const products = await productsCollection
+          .find({ showOnHome: true }) // only selected for home
+          .limit(6) // only 6 products
+          .toArray();
+        res.send(products);
+      } catch (err) {
+        res.status(500).send({ message: "Failed to fetch home products" });
+      }
+    });
     app.post("/products", verifyFireBaseToken, async (req, res) => {
       const product = { ...req.body, managerEmail: req.userEmail };
       const result = await productsCollection.insertOne(product);
@@ -376,6 +386,33 @@ async function run() {
 
       res.send({ message: "Order marked as paid" });
     });
+    app.post(
+      "/book-product",
+      verifyFireBaseToken,
+      async (req, res) => {
+        const data = req.body;
+        const newOrder = {
+          productId: data.productId,
+          productName: data.productName,
+          price: data.price,
+          quantity: data.quantity,
+          orderPrice: data.orderPrice,
+          userEmail: data.userEmail,
+          userName: data.userName,
+          firstName: data.firstName,
+          lastName: data.lastName,
+          contactNumber: data.contactNumber,
+          deliveryAddress: data.deliveryAddress,
+          notes: data.notes,
+          paymentOption: data.paymentOption,
+          status: "Pending",
+          orderDate: new Date(),
+          createdAt: new Date(),
+        };
+        const result = await ordersCollection.insertOne(newOrder);
+        res.send(result);
+      }
+    );
     app.post("/orders/payment-success", async (req, res) => {
       try {
         const {
@@ -440,6 +477,7 @@ async function run() {
         res.status(500).send({ message: "Failed to create order" });
       }
     });
+
     // ================= Home Test =================
     app.get("/", (req, res) => {
       res.send("Garments Order & Production Tracker Backend is running!");
