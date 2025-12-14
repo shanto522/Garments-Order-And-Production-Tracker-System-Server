@@ -105,6 +105,19 @@ async function run() {
 
       res.send({ orders, total });
     });
+    //------Get pending orders--------
+    app.get(
+      "/orders/pending",
+      verifyFireBaseToken,
+      // verifyManager,
+      checkSuspended,
+      async (req, res) => {
+        const orders = await ordersCollection
+          .find({ status: "Pending" })
+          .toArray();
+        res.send(orders);
+      }
+    );
 
     // ================= Home Test =================
     app.get("/", (req, res) => {
