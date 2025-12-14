@@ -38,6 +38,7 @@ async function run() {
     const productsCollection = db.collection("products");
     const ordersCollection = db.collection("orders");
     const usersCollection = db.collection("users");
+    const feedbacksCollection = db.collection("feedbacks");
     console.log("MongoDB connected successfully!");
 
     const verifyFireBaseToken = async (req, res, next) => {
@@ -386,33 +387,55 @@ async function run() {
 
       res.send({ message: "Order marked as paid" });
     });
-    app.post(
-      "/book-product",
-      verifyFireBaseToken,
-      async (req, res) => {
-        const data = req.body;
-        const newOrder = {
-          productId: data.productId,
-          productName: data.productName,
-          price: data.price,
-          quantity: data.quantity,
-          orderPrice: data.orderPrice,
-          userEmail: data.userEmail,
-          userName: data.userName,
-          firstName: data.firstName,
-          lastName: data.lastName,
-          contactNumber: data.contactNumber,
-          deliveryAddress: data.deliveryAddress,
-          notes: data.notes,
-          paymentOption: data.paymentOption,
+    app.post("/book-product", verifyFireBaseToken, async (req, res) => {
+      const data = req.body;
+      const newOrder = {
+        productId: data.productId,
+        productName: data.productName,
+        price: data.price,
+        quantity: data.quantity,
+        orderPrice: data.orderPrice,
+        userEmail: data.userEmail,
+        userName: data.userName,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        contactNumber: data.contactNumber,
+        deliveryAddress: data.deliveryAddress,
+        notes: data.notes,
+        paymentOption: data.paymentOption,
+        status: "Pending",
+        orderDate: new Date(),
+        createdAt: new Date(),
+      };
+      const result = await ordersCollection.insertOne(newOrder);
+      res.send(result);
+    });
+    app.post("/book-product/:id", verifyFireBaseToken, async (req, res) => {
+      try {
+        const productId = req.params.id;
+        const product = await productsCollection.findOne({
+          _id: new ObjectId(productId),
+        });
+        if (!product)
+          return res.status(404).send({ message: "Product not found" });
+
+        const booking = {
+          productId,
+          productName: product.name,
+          userEmail: req.userEmail,
+          quantity: req.body.quantity || 1,
           status: "Pending",
-          orderDate: new Date(),
-          createdAt: new Date(),
+          paymentOption: req.body.paymentOption || "Cash on Delivery",
+          bookedAt: new Date(),
         };
-        const result = await ordersCollection.insertOne(newOrder);
+
+        const result = await ordersCollection.insertOne(booking);
         res.send(result);
+      } catch (err) {
+        res.status(500).send({ message: "Failed to book product" });
       }
-    );
+    });
+
     app.post("/orders/payment-success", async (req, res) => {
       try {
         const {
@@ -477,7 +500,37 @@ async function run() {
         res.status(500).send({ message: "Failed to create order" });
       }
     });
+    app.post("/feedbacks", verifyFireBaseToken, async (req, res) => {
+      const { name, message } = req.body;
+      if (!name || !message)
+        return res.status(400).send({ message: "All fields required" });
 
+      try {
+        const result = await feedbacksCollection.insertOne({
+          name,
+          message,
+          createdAt: new Date(),
+        });
+        res.send({ success: true, id: result.insertedId });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to save feedback" });
+      }
+    });
+    app.get("/feedbacks", async (req, res) => {
+      const limit = parseInt(req.query.limit) || 0; // 0 = all
+      try {
+        const feedbacks = await feedbacksCollection
+          .find()
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .toArray();
+        res.send(feedbacks);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to fetch feedbacks" });
+      }
+    });
     // ================= Home Test =================
     app.get("/", (req, res) => {
       res.send("Garments Order & Production Tracker Backend is running!");
