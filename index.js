@@ -83,6 +83,15 @@ async function run() {
         .toArray();
       res.send({ products, total });
     });
+    //----------Get single product------
+    app.get("/products/:id", async (req, res) => {
+      const product = await productsCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
+      if (!product)
+        return res.status(404).send({ message: "Product not found" });
+      res.send(product);
+    });
     // ================= Home Test =================
     app.get("/", (req, res) => {
       res.send("Garments Order & Production Tracker Backend is running!");
