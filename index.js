@@ -105,19 +105,70 @@ async function run() {
 
       res.send({ orders, total });
     });
-    //------Get pending orders--------
-    app.get(
-      "/orders/pending",
+    //------Cancel order Customer------
+    app.put(
+      "/cancel-order/:id",
       verifyFireBaseToken,
-      // verifyManager,
-      checkSuspended,
       async (req, res) => {
-        const orders = await ordersCollection
-          .find({ status: "Pending" })
-          .toArray();
-        res.send(orders);
+        const order = await ordersCollection.findOne({
+          _id: new ObjectId(req.params.id),
+          userEmail: req.userEmail,
+        });
+        if (!order) return res.status(404).send({ message: "Order not found" });
+        if (order.status !== "Pending")
+          return res
+            .status(400)
+            .send({ message: "Only pending orders can be canceled" });
+
+        const result = await ordersCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { status: "Canceled", canceledAt: new Date() } }
+        );
+        res.send(result);
       }
     );
+
+    //------Get pending orders--------
+    app.get("/orders/pending", verifyFireBaseToken, async (req, res) => {
+      const orders = await ordersCollection
+        .find({ status: "Pending" })
+        .toArray();
+      res.send(orders);
+    });
+
+    //------Get approved orders-----
+    app.get("/orders/approved", verifyFireBaseToken, async (req, res) => {
+      try {
+        const orders = await ordersCollection
+          .find({ status: "Approved" })
+          .toArray();
+        res.send(orders);
+      } catch (err) {
+        res.status(500).send({ message: "Failed to fetch approved orders" });
+      }
+    });
+    //-------Approve or reject order------
+    app.put("/orders/:id", verifyFireBaseToken, async (req, res) => {
+      const { status, trackingStage } = req.body;
+      const updateData = {};
+
+      if (status) updateData.status = status;
+      if (trackingStage) {
+        const order = await ordersCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+        const existingTracking = order.tracking || [];
+        updateData.tracking = [...existingTracking, trackingStage];
+      }
+      if (status === "Approved") updateData.approvedAt = new Date();
+
+      const result = await ordersCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: updateData }
+      );
+
+      res.send(result);
+    });
 
     // ================= Home Test =================
     app.get("/", (req, res) => {
