@@ -10,7 +10,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const port = process.env.PORT || 3000;
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
 const admin = require("firebase-admin");
-// ================= Firebase Admin Initialization =================
+//=======Firebase Admin Initialization=====
 const serviceAccount = require("./garments-order-tracker-client-firebase-adminsdk.json");
 
 admin.initializeApp({
@@ -40,7 +40,7 @@ async function run() {
     const usersCollection = db.collection("users");
     const feedbacksCollection = db.collection("feedbacks");
     console.log("MongoDB connected successfully!");
-
+    //==========Firebase Token Verify===========
     const verifyFireBaseToken = async (req, res, next) => {
       const authorization = req.headers.authorization;
       if (!authorization) {
@@ -55,6 +55,7 @@ async function run() {
         return res.status(401).send({ message: "unauthorized access" });
       }
     };
+    //==========ADMIN ONLY===========
     const verifyAdmin = async (req, res, next) => {
       const user = await usersCollection.findOne({ email: req.userEmail });
       if (!user || user.role !== "admin") {
@@ -62,7 +63,7 @@ async function run() {
       }
       next();
     };
-
+    //==========MANAGER ONLY==========
     const verifyManager = async (req, res, next) => {
       const user = await usersCollection.findOne({ email: req.userEmail });
       if (!user || (user.role !== "manager" && user.role !== "admin")) {
@@ -70,6 +71,7 @@ async function run() {
       }
       next();
     };
+    //==========Suspended user block==========
     const checkSuspended = async (req, res, next) => {
       const user = await usersCollection.findOne({ email: req.userEmail });
       if (!user) return res.status(404).send({ message: "User not found" });
@@ -80,6 +82,9 @@ async function run() {
       }
       next();
     };
+    // =================================================
+    // 👤 PUBLIC / AUTHENTICATED USER ROUTES
+    // =================================================
     app.post("/users", verifyFireBaseToken, async (req, res) => {
       const { email, name, photoURL } = req.body;
       const existingUser = await usersCollection.findOne({ email });
@@ -95,6 +100,27 @@ async function run() {
       const result = await usersCollection.insertOne(newUser);
       res.send(result);
     });
+    app.get("/profile", verifyFireBaseToken, async (req, res) => {
+      try {
+        const email = req.userEmail;
+        const user = await usersCollection.findOne({ email });
+        if (!user) return res.status(404).send({ message: "User not found" });
+
+        res.send({
+          name: user.name,
+          email: user.email,
+          role: user.role || "Customer",
+          photoURL: user.photoURL || "",
+          status: user.suspended ? "Suspended" : "Active",
+          suspendFeedback: user.suspendReason || "",
+        });
+      } catch (err) {
+        res.status(500).send({ message: "Failed to fetch profile" });
+      }
+    });
+    // =================================================
+    // 📦 PRODUCT ROUTES
+    // =================================================
     app.get("/home-products", async (req, res) => {
       try {
         const products = await productsCollection
@@ -106,18 +132,6 @@ async function run() {
         res.status(500).send({ message: "Failed to fetch home products" });
       }
     });
-    app.post(
-      "/products",
-      verifyFireBaseToken,
-      // verifyManager,
-      checkSuspended,
-      async (req, res) => {
-        const product = { ...req.body, managerEmail: req.userEmail };
-        const result = await productsCollection.insertOne(product);
-        res.send(result);
-      }
-    );
-
     app.get("/all-products", async (req, res) => {
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 10;
@@ -131,7 +145,6 @@ async function run() {
         .toArray();
       res.send({ products, total });
     });
-
     app.get("/products/:id", async (req, res) => {
       const product = await productsCollection.findOne({
         _id: new ObjectId(req.params.id),
@@ -140,6 +153,206 @@ async function run() {
         return res.status(404).send({ message: "Product not found" });
       res.send(product);
     });
+    //=============================================
+    //================== Manager ==================
+    //=============================================
+    app.post(
+      "/products",
+      verifyFireBaseToken,
+      verifyManager,
+      checkSuspended,
+      async (req, res) => {
+        const product = { ...req.body, managerEmail: req.userEmail };
+        const result = await productsCollection.insertOne(product);
+        res.send(result);
+      }
+    );
+    app.get(
+      "/orders/pending",
+      verifyFireBaseToken,
+      verifyManager,
+      async (req, res) => {
+        const orders = await ordersCollection
+          .find({ status: "Pending" })
+          .toArray();
+        res.send(orders);
+      }
+    );
+    app.get(
+      "/orders/approved",
+      verifyFireBaseToken,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const orders = await ordersCollection
+            .find({ status: "Approved" })
+            .toArray();
+          res.send(orders);
+        } catch (err) {
+          res.status(500).send({ message: "Failed to fetch approved orders" });
+        }
+      }
+    );
+
+    app.get(
+      "/products",
+      verifyFireBaseToken,
+      verifyManager,
+      checkSuspended,
+      async (req, res) => {
+        const products = await productsCollection.find().toArray();
+        res.send(products);
+      }
+    );
+    app.put(
+      "/products/:id",
+      verifyFireBaseToken,
+      verifyManager,
+      checkSuspended,
+      async (req, res) => {
+        const id = req.params.id;
+        const product = await productsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!product)
+          return res.status(404).send({ message: "Product not found" });
+        if (
+          req.userRole === "manager" &&
+          product.managerEmail !== req.userEmail
+        ) {
+          return res
+            .status(403)
+            .send({ message: "Cannot edit other manager's product" });
+        }
+        const result = await productsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: req.body }
+        );
+        res.send(result);
+      }
+    );
+    app.delete(
+      "/products/:id",
+      verifyFireBaseToken,
+      verifyManager,
+      checkSuspended,
+      async (req, res) => {
+        const id = req.params.id;
+        const product = await productsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!product)
+          return res.status(404).send({ message: "Product not found" });
+        if (
+          req.userRole === "manager" &&
+          product.managerEmail !== req.userEmail
+        ) {
+          return res
+            .status(403)
+            .send({ message: "Cannot delete other manager's product" });
+        }
+        const result = await productsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      }
+    );
+    app.get(
+      "/orders",
+      verifyFireBaseToken,
+      verifyManager,
+      checkSuspended,
+      async (req, res) => {
+        const query = {};
+        if (req.query.status) query.status = req.query.status;
+        const orders = await ordersCollection.find(query).toArray();
+        res.send(orders);
+      }
+    );
+    //===========================================
+    //==================== Admin ================
+    //===========================================
+    app.get("/users", verifyFireBaseToken, verifyAdmin, async (req, res) => {
+      const { search, role, status, page = 1, limit = 10 } = req.query;
+      const query = {};
+      if (search) {
+        query.$or = [
+          { name: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+        ];
+      }
+      if (role && role !== "all") {
+        query.role = role;
+      }
+      if (status && status !== "all") {
+        query.suspended = status === "suspended";
+      }
+      const total = await usersCollection.countDocuments(query);
+      const users = await usersCollection
+        .find(query)
+        .skip((page - 1) * parseInt(limit))
+        .limit(parseInt(limit))
+        .toArray();
+      res.send({ users, total });
+    });
+    app.put(
+      "/users/:id",
+      verifyFireBaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const { role, suspended, suspendReason } = req.body;
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role, suspended, suspendReason: suspendReason || "" } }
+        );
+        res.send(result);
+      }
+    );
+    app.delete(
+      "/users/:id",
+      verifyFireBaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const result = await usersCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      }
+    );
+    app.delete(
+      "/orders/:id",
+      verifyFireBaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const result = await ordersCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      }
+    );
+    app.put(
+      "/orders/:id/status",
+      verifyFireBaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const { status } = req.body; // Pending / Approved / Rejected
+        const approvedAt = status === "Approved" ? new Date() : null;
+
+        const result = await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status, approvedAt } }
+        );
+        res.send(result);
+      }
+    );
+    //=========================================
+    //============ Customer ===================
+    //=========================================
+
     app.get("/my-orders", async (req, res) => {
       const { email, page = 1, limit = 10 } = req.query;
       const skip = (page - 1) * limit;
@@ -177,33 +390,6 @@ async function run() {
         res.send(result);
       }
     );
-    app.get(
-      "/orders/pending",
-      verifyFireBaseToken,
-      // verifyManager,
-      async (req, res) => {
-        const orders = await ordersCollection
-          .find({ status: "Pending" })
-          .toArray();
-        res.send(orders);
-      }
-    );
-
-    app.get(
-      "/orders/approved",
-      verifyFireBaseToken,
-      // verifyManager,
-      async (req, res) => {
-        try {
-          const orders = await ordersCollection
-            .find({ status: "Approved" })
-            .toArray();
-          res.send(orders);
-        } catch (err) {
-          res.status(500).send({ message: "Failed to fetch approved orders" });
-        }
-      }
-    );
 
     app.put("/orders/:id", verifyFireBaseToken, async (req, res) => {
       const { status, trackingStage } = req.body;
@@ -226,81 +412,6 @@ async function run() {
 
       res.send(result);
     });
-    app.get(
-      "/products",
-      verifyFireBaseToken,
-      // verifyManager,
-      checkSuspended,
-      async (req, res) => {
-        const products = await productsCollection.find().toArray();
-        res.send(products);
-      }
-    );
-    app.put(
-      "/products/:id",
-      verifyFireBaseToken,
-      // verifyManager,
-      checkSuspended,
-      async (req, res) => {
-        const id = req.params.id;
-        const product = await productsCollection.findOne({
-          _id: new ObjectId(id),
-        });
-        if (!product)
-          return res.status(404).send({ message: "Product not found" });
-        if (
-          req.userRole === "manager" &&
-          product.managerEmail !== req.userEmail
-        ) {
-          return res
-            .status(403)
-            .send({ message: "Cannot edit other manager's product" });
-        }
-        const result = await productsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: req.body }
-        );
-        res.send(result);
-      }
-    );
-    app.delete(
-      "/products/:id",
-      verifyFireBaseToken,
-      // verifyManager,
-      checkSuspended,
-      async (req, res) => {
-        const id = req.params.id;
-        const product = await productsCollection.findOne({
-          _id: new ObjectId(id),
-        });
-        if (!product)
-          return res.status(404).send({ message: "Product not found" });
-        if (
-          req.userRole === "manager" &&
-          product.managerEmail !== req.userEmail
-        ) {
-          return res
-            .status(403)
-            .send({ message: "Cannot delete other manager's product" });
-        }
-        const result = await productsCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-        res.send(result);
-      }
-    );
-    app.get(
-      "/orders",
-      verifyFireBaseToken,
-      //  verifyManager,
-      checkSuspended,
-      async (req, res) => {
-        const query = {};
-        if (req.query.status) query.status = req.query.status;
-        const orders = await ordersCollection.find(query).toArray();
-        res.send(orders);
-      }
-    );
     // 1️⃣ User places order
     app.post(
       "/orders",
@@ -319,88 +430,6 @@ async function run() {
           createdAt: new Date(),
         };
         const result = await ordersCollection.insertOne(newOrder);
-        res.send(result);
-      }
-    );
-
-    app.get("/profile", verifyFireBaseToken, async (req, res) => {
-      try {
-        const email = req.userEmail;
-        const user = await usersCollection.findOne({ email });
-        if (!user) return res.status(404).send({ message: "User not found" });
-
-        res.send({
-          name: user.name,
-          email: user.email,
-          role: user.role || "Customer",
-          photoURL: user.photoURL || "",
-          status: user.suspended ? "Suspended" : "Active",
-          suspendFeedback: user.suspendReason || "",
-        });
-      } catch (err) {
-        res.status(500).send({ message: "Failed to fetch profile" });
-      }
-    });
-    app.get(
-      "/users",
-      // verifyAdmin,
-      verifyFireBaseToken,
-      async (req, res) => {
-        const users = await usersCollection.find().toArray();
-        res.send(users);
-      }
-    );
-    app.put(
-      "/users/:id",
-      verifyFireBaseToken,
-      // verifyAdmin,
-      async (req, res) => {
-        const id = req.params.id;
-        const { role, suspended, suspendReason } = req.body;
-        const result = await usersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { role, suspended, suspendReason: suspendReason || "" } }
-        );
-        res.send(result);
-      }
-    );
-    app.delete(
-      "/users/:id",
-      verifyFireBaseToken,
-      // verifyAdmin,
-      async (req, res) => {
-        const id = req.params.id;
-        const result = await usersCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-        res.send(result);
-      }
-    );
-    app.delete(
-      "/orders/:id",
-      verifyFireBaseToken,
-      // verifyAdmin,
-      async (req, res) => {
-        const id = req.params.id;
-        const result = await ordersCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-        res.send(result);
-      }
-    );
-    app.put(
-      "/orders/:id/status",
-      verifyFireBaseToken,
-      // verifyAdmin,
-      async (req, res) => {
-        const id = req.params.id;
-        const { status } = req.body; // Pending / Approved / Rejected
-        const approvedAt = status === "Approved" ? new Date() : null;
-
-        const result = await ordersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { status, approvedAt } }
-        );
         res.send(result);
       }
     );
@@ -455,6 +484,9 @@ async function run() {
 
       res.send(order);
     });
+    //=============================================
+    //================ Stripe Payment =============
+    //==============================================
     app.post("/create-checkout-session", async (req, res) => {
       try {
         const { productId, productName, cost, senderEmail, metadata } =
@@ -638,6 +670,8 @@ async function run() {
         res.status(500).send({ message: "Failed to save feedback" });
       }
     });
+
+    //============= Feedback ================
     app.get("/feedbacks", async (req, res) => {
       const limit = parseInt(req.query.limit) || 0; // 0 = all
       try {
