@@ -66,11 +66,30 @@ async function run() {
     //==========MANAGER ONLY==========
     const verifyManager = async (req, res, next) => {
       const user = await usersCollection.findOne({ email: req.userEmail });
-      if (!user || (user.role !== "manager" && user.role !== "admin")) {
-        return res.status(403).send({ message: "forbidden: manager only" });
+
+      if (!user) {
+        return res.status(401).send({ message: "Unauthorized" });
       }
+
+      // 🔥 ADD THESE
+      req.userRole = user.role;
+      req.userStatus = user.status;
+
+      if (user.role === "admin") {
+        return next();
+      }
+
+      if (user.role === "manager" && user.status !== "approved") {
+        return res.status(403).send({ message: "Manager not approved" });
+      }
+
+      if (user.role !== "manager") {
+        return res.status(403).send({ message: "Forbidden" });
+      }
+
       next();
     };
+
     //==========Suspended user block==========
     const checkSuspended = async (req, res, next) => {
       const user = await usersCollection.findOne({ email: req.userEmail });
@@ -86,19 +105,29 @@ async function run() {
     // 👤 PUBLIC / AUTHENTICATED USER ROUTES
     // =================================================
     app.post("/users", verifyFireBaseToken, async (req, res) => {
-      const { email, name, photoURL } = req.body;
-      const existingUser = await usersCollection.findOne({ email });
-      if (existingUser) return res.send({ message: "User already exists" });
+      try {
+        const { email, name, photoURL, role } = req.body; // role এখানে add করা হলো
 
-      const newUser = {
-        email,
-        name,
-        photoURL,
-        role: "customer",
-        suspended: false,
-      };
-      const result = await usersCollection.insertOne(newUser);
-      res.send(result);
+        const existingUser = await usersCollection.findOne({ email });
+        if (existingUser) return res.send({ message: "User already exists" });
+        const userRole =
+          role && role.toLowerCase() === "admin" ? "admin" : role || "customer";
+        const newUser = {
+          email,
+          name,
+          photoURL,
+          role: userRole,
+          suspended: false,
+          suspendReason: "",
+          status: userRole === "admin" ? "approved" : "pending", // manager approval
+        };
+
+        const result = await usersCollection.insertOne(newUser);
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to create user" });
+      }
     });
     app.get("/profile", verifyFireBaseToken, async (req, res) => {
       try {
@@ -111,7 +140,12 @@ async function run() {
           email: user.email,
           role: user.role || "Customer",
           photoURL: user.photoURL || "",
-          status: user.suspended ? "Suspended" : "Active",
+          status:
+            user.role === "admin"
+              ? "approved"
+              : user.suspended
+              ? "suspended"
+              : user.status || "pending",
           suspendFeedback: user.suspendReason || "",
         });
       } catch (err) {
@@ -162,7 +196,12 @@ async function run() {
       verifyManager,
       checkSuspended,
       async (req, res) => {
-        const product = { ...req.body, managerEmail: req.userEmail };
+        const product = {
+          ...req.body,
+          createdBy: req.userEmail,
+          managerEmail: req.userEmail,
+          createdAt: new Date(),
+        };
         const result = await productsCollection.insertOne(product);
         res.send(result);
       }
@@ -285,7 +324,14 @@ async function run() {
         query.role = role;
       }
       if (status && status !== "all") {
-        query.suspended = status === "suspended";
+        if (status === "pending") {
+          query.status = "pending";
+        } else if (status === "active") {
+          query.status = "approved";
+          query.suspended = false;
+        } else if (status === "suspended") {
+          query.suspended = true;
+        }
       }
       const total = await usersCollection.countDocuments(query);
       const users = await usersCollection
@@ -295,6 +341,19 @@ async function run() {
         .toArray();
       res.send({ users, total });
     });
+    app.patch(
+      "/users/approve/:id",
+      verifyFireBaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        await usersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: "approved" } }
+        );
+        res.send({ success: true });
+      }
+    );
     app.put(
       "/users/:id",
       verifyFireBaseToken,
@@ -353,8 +412,10 @@ async function run() {
     //============ Customer ===================
     //=========================================
 
-    app.get("/my-orders", async (req, res) => {
-      const { email, page = 1, limit = 10 } = req.query;
+    app.get("/my-orders", verifyFireBaseToken, async (req, res) => {
+      const email = req.userEmail; // 🔥 token থেকে নিবে
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
       const skip = (page - 1) * limit;
 
       const total = await ordersCollection.countDocuments({ userEmail: email });
@@ -509,8 +570,8 @@ async function run() {
           mode: "payment",
           customer_email: senderEmail,
           metadata, // save order info for after payment
-          success_url: `${domain}/dashboard/payment-success`,
-          cancel_url: `${domain}/dashboard/payment-cancel`,
+          success_url: `${domain}/payment-success`,
+          cancel_url: `${domain}/payment-cancel`,
         });
 
         res.status(200).send({ url: session.url });
