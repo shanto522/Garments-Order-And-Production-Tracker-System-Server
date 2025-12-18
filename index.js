@@ -1,4 +1,3 @@
-// index.js
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
@@ -214,7 +213,20 @@ async function run() {
         const orders = await ordersCollection
           .find({ status: "Pending" })
           .toArray();
-        res.send(orders);
+
+        const ordersWithUser = await Promise.all(
+          orders.map(async (order) => {
+            const user = await usersCollection.findOne({
+              email: order.userEmail,
+            });
+            return {
+              ...order,
+              userName: user?.name || "Unknown",
+            };
+          })
+        );
+
+        res.send(ordersWithUser);
       }
     );
     app.get(
@@ -226,7 +238,20 @@ async function run() {
           const orders = await ordersCollection
             .find({ status: "Approved" })
             .toArray();
-          res.send(orders);
+          // Add userName
+          const ordersWithUser = await Promise.all(
+            orders.map(async (order) => {
+              const user = await usersCollection.findOne({
+                email: order.userEmail,
+              });
+              return {
+                ...order,
+                userName: user?.name || "Unknown",
+              };
+            })
+          );
+
+          res.send(ordersWithUser);
         } catch (err) {
           res.status(500).send({ message: "Failed to fetch approved orders" });
         }
@@ -605,7 +630,7 @@ async function run() {
         quantity: data.quantity,
         orderPrice: data.orderPrice,
         userEmail: data.userEmail,
-        userName: data.userName,
+        userName: data.userName || "Anonymous",
         firstName: data.firstName,
         lastName: data.lastName,
         contactNumber: data.contactNumber,
@@ -636,6 +661,7 @@ async function run() {
             productId,
             productName: product.name,
             userEmail: req.userEmail,
+            userName: req.body.userName || "Anonymous",
             quantity: req.body.quantity || 1,
             status: "Pending",
             paymentOption: req.body.paymentOption || "Cash on Delivery",
@@ -698,6 +724,7 @@ async function run() {
           deliveryAddress,
           notes,
           userEmail,
+          userName: req.body.userName || "Anonymous",
           paymentOption: paymentOption || "Cash on Delivery",
           status: "Pending",
           paymentStatus: "Paid",
