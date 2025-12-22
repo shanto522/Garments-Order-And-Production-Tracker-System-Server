@@ -8,9 +8,14 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 const port = process.env.PORT || 3000;
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
+// const stripe = require("stripe")(process.env.STRIPE_SECRET);
 const admin = require("firebase-admin");
 //=======Firebase Admin Initialization=====
-const serviceAccount = require("./garments-order-tracker-client-firebase-adminsdk.json");
+const decoded = Buffer.from(
+  process.env.FIREBASE_SERVICE_KEY,
+  "base64"
+).toString("utf8");
+const serviceAccount = JSON.parse(decoded);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -31,14 +36,14 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
 
     const db = client.db("garmentsDB");
     const productsCollection = db.collection("products");
     const ordersCollection = db.collection("orders");
     const usersCollection = db.collection("users");
     const feedbacksCollection = db.collection("feedbacks");
-    console.log("MongoDB connected successfully!");
+    // console.log("MongoDB connected successfully!");
     //==========Firebase Token Verify===========
     const verifyFireBaseToken = async (req, res, next) => {
       const authorization = req.headers.authorization;
@@ -166,17 +171,14 @@ async function run() {
       }
     });
     app.get("/all-products", async (req, res) => {
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit) || 10;
-      const skip = (page - 1) * limit;
-
-      const total = await productsCollection.countDocuments();
-      const products = await productsCollection
-        .find()
-        .skip(skip)
-        .limit(limit)
-        .toArray();
-      res.send({ products, total });
+      try {
+        const products = await productsCollection.find().toArray();
+        const total = products.length;
+        res.send({ products, total });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Server Error" });
+      }
     });
     app.get("/products/:id", async (req, res) => {
       const product = await productsCollection.findOne({
@@ -213,20 +215,7 @@ async function run() {
         const orders = await ordersCollection
           .find({ status: "Pending" })
           .toArray();
-
-        const ordersWithUser = await Promise.all(
-          orders.map(async (order) => {
-            const user = await usersCollection.findOne({
-              email: order.userEmail,
-            });
-            return {
-              ...order,
-              userName: user?.name || "Unknown",
-            };
-          })
-        );
-
-        res.send(ordersWithUser);
+        res.send(orders);
       }
     );
     app.get(
@@ -238,20 +227,7 @@ async function run() {
           const orders = await ordersCollection
             .find({ status: "Approved" })
             .toArray();
-          // Add userName
-          const ordersWithUser = await Promise.all(
-            orders.map(async (order) => {
-              const user = await usersCollection.findOne({
-                email: order.userEmail,
-              });
-              return {
-                ...order,
-                userName: user?.name || "Unknown",
-              };
-            })
-          );
-
-          res.send(ordersWithUser);
+          res.send(orders);
         } catch (err) {
           res.status(500).send({ message: "Failed to fetch approved orders" });
         }
@@ -264,7 +240,10 @@ async function run() {
       verifyManager,
       checkSuspended,
       async (req, res) => {
-        const products = await productsCollection.find().toArray();
+        const products = await productsCollection
+          .find()
+          .sort({ _id: -1 })
+          .toArray();
         res.send(products);
       }
     );
@@ -519,6 +498,7 @@ async function run() {
         res.send(result);
       }
     );
+
     app.put("/orders/:id/progress", async (req, res) => {
       const { stage, currentLocation } = req.body;
       const orderId = req.params.id;
@@ -605,6 +585,7 @@ async function run() {
         res.status(500).send({ message: "Failed to create Stripe session" });
       }
     });
+
     // Order paid after success
     app.put("/order-paid/:id", async (req, res) => {
       const orderId = req.params.id;
@@ -630,7 +611,7 @@ async function run() {
         quantity: data.quantity,
         orderPrice: data.orderPrice,
         userEmail: data.userEmail,
-        userName: data.userName || "Anonymous",
+        userName: data.userName,
         firstName: data.firstName,
         lastName: data.lastName,
         contactNumber: data.contactNumber,
@@ -661,7 +642,6 @@ async function run() {
             productId,
             productName: product.name,
             userEmail: req.userEmail,
-            userName: req.body.userName || "Anonymous",
             quantity: req.body.quantity || 1,
             status: "Pending",
             paymentOption: req.body.paymentOption || "Cash on Delivery",
@@ -774,14 +754,8 @@ async function run() {
         res.status(500).send({ message: "Failed to fetch feedbacks" });
       }
     });
-    // ================= Home Test =================
-    app.get("/", (req, res) => {
-      res.send("Garments Order & Production Tracker Backend is running!");
-    });
-
-    console.log("Backend routes ready...");
+    // console.log("Backend routes ready...");
   } finally {
-    // MongoDB client stays connected to keep server alive
   }
 }
 
