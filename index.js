@@ -23,7 +23,14 @@ admin.initializeApp({
 
 // ================= Middleware =================
 app.use(express.json());
-app.use(cors());
+app.use(
+  cors({
+    origin: [
+      "https://garments-order-tracker-client.web.app",
+      "http://localhost:5173",
+    ],
+  })
+);
 // ================= MongoDB Connection =================
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.9vhb7u9.mongodb.net/?appName=Cluster0`;
 const client = new MongoClient(uri, {
@@ -154,6 +161,26 @@ async function run() {
         });
       } catch (err) {
         res.status(500).send({ message: "Failed to fetch profile" });
+      }
+    });
+    app.put("/profile", verifyFireBaseToken, async (req, res) => {
+      try {
+        const { name, photoURL } = req.body;
+        const email = req.userEmail;
+
+        const result = await usersCollection.updateOne(
+          { email },
+          {
+            $set: {
+              name,
+              photoURL,
+            },
+          }
+        );
+
+        res.send({ success: true, result });
+      } catch (err) {
+        res.status(500).send({ message: "Failed to update profile" });
       }
     });
     // =================================================
